@@ -10,27 +10,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
-/*
- * ╔══════════════════════════════════════════════════════════════════════╗
- * ║                NEXUS ENGINE v3.1 ENTERPRISE EDITION                ║
- * ║          Secure VM + In-Memory DB + Persistence Layer              ║
- * ╚══════════════════════════════════════════════════════════════════════╝
- *
- * SECURITY FIXES OVER v3.0:
- * ✔ [CRITICAL]  Replaced Java deserialization (ObjectInputStream) with a
- *               safe custom text-based format — eliminates RCE via gadget chains
- * ✔ [HIGH]      Path traversal protection on SAVE / LOAD filenames
- * ✔ [HIGH]      Strict operator whitelist in QUERY — prevents injection
- * ✔ [MEDIUM]    AtomicInteger for lastResult — eliminates race condition
- * ✔ [MEDIUM]    INC / DEC now fail loudly when variable is absent
- * ✔ [MEDIUM]    DROP requires explicit confirmation (DROP CONFIRM)
- * ✔ [MEDIUM]    Record ID length capped (MAX_ID_LENGTH)
- * ✔ [MEDIUM]    Field key restricted to [a-zA-Z0-9_] — no injection via keys
- * ✔ [LOW]       Double equality uses epsilon comparison, not ==
- * ✔ [LOW]       autoSave logs failure instead of silently swallowing it
- * ✔ [LOW]       LOAD is atomic — full rollback on parse error (no partial state)
- * ✔ [LOW]       Levenshtein input bounded to prevent quadratic blow-up
- */
 
 public class NexusEngine {
 
@@ -96,8 +75,6 @@ public class NexusEngine {
         }
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
 class Term {
 
     private static final String RESET   = "\u001B[0m";
@@ -134,7 +111,7 @@ class Term {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
+
 class Parser {
 
     private static final Pattern TOKEN_PATTERN =
@@ -150,7 +127,6 @@ class Parser {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 class OpLog {
 
     private final Deque<String> log = new ArrayDeque<>();
@@ -171,26 +147,8 @@ class OpLog {
         Term.separator();
     }
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-/**
- * Safe persistence helper.
- * FIX [CRITICAL]: Replaced Java serialization (ObjectInputStream /
- * ObjectOutputStream) with a plain-text format.  Java deserialization of
- * untrusted files is a well-known Remote Code Execution vector (CVE class
- * CWE-502) exploitable through gadget chains present in many JDK versions.
- * The custom format holds no executable class data, so a malicious .nxs file
- * cannot execute arbitrary code on load.
- *
- * File format (UTF-8, line-oriented):
- *   LASTRESULT <int>
- *   VAR <name> <int>
- *   REC <id> <field>=<value> [<field>=<value> ...]
- */
 class Persistence {
 
-    // FIX [HIGH]: Restrict save/load paths to the current working directory
-    // and a safe filename pattern to prevent path traversal attacks.
     private static final Pattern SAFE_FILENAME =
             Pattern.compile("^[a-zA-Z0-9_\\-]+\\.nxs$");
 
@@ -199,7 +157,6 @@ class Persistence {
             throw new IllegalArgumentException(
                     "Filename must match [a-zA-Z0-9_-]+.nxs  e.g. save.nxs");
 
-        // Resolve against cwd and double-check no directory components snuck in.
         Path base = Paths.get("").toAbsolutePath();
         Path target = base.resolve(filename).normalize();
 
@@ -209,7 +166,6 @@ class Persistence {
         return target;
     }
 
-    /** Serialize runtime + database to the safe text format. */
     static void save(String filename,
                      Map<String, Integer> vars,
                      int lastResult,
@@ -233,11 +189,6 @@ class Persistence {
         Files.writeString(path, sb.toString(), StandardCharsets.UTF_8);
     }
 
-    /**
-     * Deserialize from the safe text format.
-     * FIX [LOW]: Load is fully validated before any state is mutated,
-     * so a corrupt file leaves the runtime unchanged (atomic swap).
-     */
     static LoadResult load(String filename) throws IOException {
 
         Path path = safePath(filename);
@@ -287,18 +238,15 @@ class Persistence {
                       int lastResult) {}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 class RuntimeEngine {
 
     private static final int MAX_VARIABLES    = 1000;
-    private static final int MAX_CMD_LENGTH   = 2048; // guard against huge inputs
+    private static final int MAX_CMD_LENGTH   = 2048; 
 
     private final Map<String, Integer> vars = new ConcurrentHashMap<>();
     private final DatabaseEngine database   = new DatabaseEngine();
     private final OpLog log                 = new OpLog();
 
-    // FIX [MEDIUM]: Use AtomicInteger so concurrent reads/writes to lastResult
-    // are race-condition-free without requiring manual synchronisation.
     private final AtomicInteger lastResult = new AtomicInteger(0);
 
     DatabaseEngine getDatabase() { return database; }
@@ -341,8 +289,6 @@ class RuntimeEngine {
             Term.error(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName());
         }
     }
-
-    // ── Variable name validation ──────────────────────────────────────────────
     private static final Pattern VALID_VAR = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]{0,63}$");
 
     private static void validateVarName(String name) {
@@ -350,8 +296,6 @@ class RuntimeEngine {
             throw new IllegalArgumentException(
                     "Variable name must be [a-zA-Z_][a-zA-Z0-9_]{0,63}: " + name);
     }
-
-    // ── Commands ──────────────────────────────────────────────────────────────
 
     private void set(List<String> p) {
         require(p, 3, "SET name value");
@@ -385,8 +329,6 @@ class RuntimeEngine {
         Term.result("Result = " + result);
     }
 
-    // FIX [MEDIUM]: Original INC/DEC used computeIfPresent which silently
-    // did nothing if the variable was absent.  Now they throw clearly.
     private void inc(List<String> p) {
         require(p, 2, "INC variable");
         String name = p.get(1);
@@ -450,7 +392,6 @@ class RuntimeEngine {
         Term.success("Runtime saved to " + p.get(1));
     }
 
-    // FIX [LOW]: State is only replaced after the entire file parses cleanly.
     private void load(List<String> p) throws IOException {
         require(p, 2, "LOAD filename.nxs");
         Persistence.LoadResult r = Persistence.load(p.get(1));
@@ -463,7 +404,6 @@ class RuntimeEngine {
         Term.success("Runtime loaded from " + p.get(1));
     }
 
-    // FIX [LOW]: autoSave now logs failure so data loss is visible.
     public void autoSave() {
         try {
             Persistence.save("autosave.nxs", vars, lastResult.get(), database.snapshot());
@@ -500,7 +440,6 @@ class RuntimeEngine {
         Term.separator();
     }
 
-    // FIX [LOW]: Bound input length before Levenshtein to prevent O(n²) blow-up.
     private static final int MAX_LEVENSHTEIN_INPUT = 32;
 
     private void unknown(String cmd) {
@@ -539,19 +478,14 @@ class RuntimeEngine {
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
 class DatabaseEngine {
 
     private static final int MAX_RECORDS      = 5000;
     private static final int MAX_FIELD_LENGTH = 256;
 
-    // FIX [MEDIUM]: Bound record IDs to stop memory exhaustion via huge keys.
     private static final int MAX_ID_LENGTH    = 64;
-
-    // FIX [MEDIUM]: Restrict field keys to safe characters to prevent injection.
     private static final Pattern VALID_KEY = Pattern.compile("^[a-zA-Z0-9_]{1,64}$");
 
-    // FIX [HIGH]: Explicit whitelist of permitted query operators.
     private static final Set<String> ALLOWED_OPS =
             Set.of(">", "<", ">=", "<=", "==", "!=");
 
@@ -655,7 +589,6 @@ class DatabaseEngine {
         String op    = p.get(2);
         String value = p.get(3);
 
-        // FIX [HIGH]: Reject any operator not in the explicit whitelist.
         if (!ALLOWED_OPS.contains(op))
             throw new IllegalArgumentException(
                     "Invalid operator '" + op + "'. Allowed: " + ALLOWED_OPS);
@@ -678,8 +611,6 @@ class DatabaseEngine {
             double x = Double.parseDouble(a);
             double y = Double.parseDouble(b);
 
-            // FIX [LOW]: Use epsilon for equality so floating-point representation
-            // does not produce surprising "not equal" results for identical values.
             final double EPSILON = 1e-9;
 
             return switch (op) {
@@ -689,7 +620,7 @@ class DatabaseEngine {
                 case "<=" -> x <= y;
                 case "==" -> Math.abs(x - y) <= EPSILON;
                 case "!=" -> Math.abs(x - y) >  EPSILON;
-                default   -> false; // unreachable — already whitelisted above
+                default   -> false; 
             };
         } catch (NumberFormatException e) {
             return switch (op) {
@@ -700,7 +631,6 @@ class DatabaseEngine {
         }
     }
 
-    // FIX [MEDIUM]: DROP now requires "DROP CONFIRM" to prevent accidental wipe.
     private void drop(List<String> p) {
         if (p.size() < 2 || !p.get(1).equalsIgnoreCase("CONFIRM"))
             throw new IllegalArgumentException(
@@ -722,20 +652,17 @@ class DatabaseEngine {
         Term.separator();
     }
 
-    /** Return an unmodifiable snapshot of the table for persistence. */
     Map<String, Map<String, String>> snapshot() {
         Map<String, Map<String, String>> copy = new LinkedHashMap<>();
         table.forEach((id, row) -> copy.put(id, Collections.unmodifiableMap(new LinkedHashMap<>(row))));
         return Collections.unmodifiableMap(copy);
     }
 
-    /** Replace the live table from a loaded snapshot (called by RuntimeEngine.load). */
     void replace(Map<String, Map<String, String>> incoming) {
         table.clear();
         incoming.forEach((id, row) -> table.put(id, new ConcurrentHashMap<>(row)));
     }
 
-    // ── Validators ────────────────────────────────────────────────────────────
 
     private static String validateId(String id) {
         if (id.length() > MAX_ID_LENGTH)
